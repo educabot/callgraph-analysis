@@ -180,8 +180,8 @@ func main() {
 							g[node.Func][otherNode.Func] = true
 
 							// For debugging
-							fmt.Printf("Added edge: %s -> %s\n",
-								node.Func.String(), otherNode.Func.String())
+							//fmt.Printf("Added edge: %s -> %s\n",
+							//	node.Func.String(), otherNode.Func.String())
 						}
 					}
 				}
