@@ -133,6 +133,9 @@ func main() {
 
 	// Build reachability graph (adjacency list)
 	g := make(map[*ssa.Function]map[*ssa.Function]bool)
+	pendingFunc := &ssa.Function{}
+	foundMultipleCall := false
+
 	err = callgraph.GraphVisitEdges(cg, func(edge *callgraph.Edge) error {
 		caller := edge.Caller.Func
 		callee := edge.Callee.Func
@@ -144,6 +147,29 @@ func main() {
 		if !strings.Contains(caller.String(), module) || !strings.Contains(callee.String(), module) {
 			return nil
 		}
+
+		// Skip if the callee is a source, this means it looped in on itself
+		if sourceFuncs[callee] {
+			return nil
+		}
+
+		// Skip Multiple and Single in the adjacency list
+		if (strings.Contains(callee.Name(), "Multiple") || strings.Contains(callee.Name(), "Single")) && pendingFunc.Name() == "" {
+			pendingFunc = caller
+			foundMultipleCall = true
+			return nil
+		}
+
+		if foundMultipleCall {
+			if !strings.Contains(callee.Name(), "Multiple") && !strings.Contains(callee.Name(), "Single") {
+				caller = pendingFunc
+				pendingFunc = &ssa.Function{}
+				foundMultipleCall = false
+			} else {
+				return nil
+			}
+		}
+
 		if g[caller] == nil {
 			g[caller] = make(map[*ssa.Function]bool)
 		}
@@ -194,8 +220,10 @@ func main() {
 
 	// For each source function
 	for sourceFunc := range sourceFuncs {
+		funcsData := make(map[*ssa.Function]token.Position)
+		pathsData := make(map[*ssa.Function][]*ssa.Function)
+		sinkReachable := false
 		sourcePos := fset.Position(sourceFunc.Pos())
-		fmt.Printf("\nSource: %s (%s:%d)\n", sourceFunc.Name(), sourcePos.Filename, sourcePos.Line)
 
 		// Find sink reachability
 		reachedSinks := make(map[*ssa.Function]bool)
@@ -205,26 +233,39 @@ func main() {
 		for sinkFunc := range sinkFuncs {
 			if visited[sinkFunc] {
 				continue
+			} else {
+				visited[sinkFunc] = true
 			}
 
 			path := findPath(fset, sourceFunc, sinkFunc, g, make(map[*ssa.Function]bool))
 			if path != nil {
 				reachedSinks[sinkFunc] = true
-
-				// Print the path
+				sinkReachable = true
 				sinkPos := fset.Position(sinkFunc.Pos())
-				fmt.Printf("  Sink reached: %s (%s:%d)\n", sinkFunc.Name(), sinkPos.Filename, sinkPos.Line)
+
+				funcsData[sinkFunc] = sinkPos
+				pathsData[sinkFunc] = path
+			}
+		}
+
+		if !sinkReachable {
+			//fmt.Println("  No sinks reached from this source.")
+		} else {
+			fmt.Printf("\nSource: %s (%s:%d)\n", sourceFunc.Name(), sourcePos.Filename, sourcePos.Line)
+			for sinkFunc, pos := range funcsData {
+				if strings.Contains(sinkFunc.Name(), "Impl") || strings.Contains(sinkFunc.Name(), "New") {
+					continue
+				}
+
+				fmt.Printf("    %s (%s:%d)\n", sinkFunc.Name(), pos.Filename, pos.Line)
 				fmt.Println("  Path:")
-				for i, func_ := range path {
+				for i, func_ := range pathsData[sinkFunc] {
 					pos := fset.Position(func_.Pos())
 					fmt.Printf("    %d. %s (%s:%d)\n", i+1, func_.Name(), pos.Filename, pos.Line)
 				}
 			}
 		}
 
-		if len(reachedSinks) == 0 {
-			fmt.Println("  No sinks reached from this source.")
-		}
 	}
 }
 
